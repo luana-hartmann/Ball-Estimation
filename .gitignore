@@ -1,0 +1,15 @@
+
+data/
+outputs/
+data.zip
+*.zip
+*.mp4
+*.npz
+*.pt
+
+# Python
+__pycache__/
+*.pyc
+venv/
+virtual_python/
+.venv/

@@ -18,6 +18,7 @@ Usage:
 import argparse
 import os
 
+import cv2
 import numpy as np
 import torch
 import torch.nn as nn
@@ -26,16 +27,43 @@ from torch.utils.data import Dataset, DataLoader, Subset
 from model import BallPatchCNN
 
 
+def augment_color(patch_bgr, rng):
+    """
+    Randomly jitters hue, saturation, and brightness. Motivated directly
+    by the test_7 failure: the classifier learned "pale, low-saturation"
+    as its signature for "ball", because that's all it ever saw in
+    training (test_2/test_5's ball happens to be that color). Test_7's
+    ball is a saturated green, and the classifier confidently rejected
+    it (~5% mean probability on the true ball). Randomly distorting hue/
+    saturation during training prevents the model from relying on any
+    single exact color, forcing it toward features that should
+    generalize across ball colors -- shape, local contrast, motion
+    context -- mirroring the same insight that made the classical
+    detector's RELATIVE contrast features (v4) more robust than absolute
+    color thresholds (v3).
+    """
+    hsv = cv2.cvtColor(patch_bgr, cv2.COLOR_BGR2HSV).astype(np.float32)
+    hsv[..., 0] = (hsv[..., 0] + rng.uniform(-40, 40)) % 180       # hue shift
+    hsv[..., 1] = np.clip(hsv[..., 1] * rng.uniform(0.4, 1.6), 0, 255)  # saturation scale
+    hsv[..., 2] = np.clip(hsv[..., 2] * rng.uniform(0.6, 1.4), 0, 255)  # brightness scale
+    return cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+
+
 class PatchDataset(Dataset):
-    def __init__(self, patches, labels):
+    def __init__(self, patches, labels, augment=False, seed=0):
         self.patches = patches
         self.labels = labels
+        self.augment = augment
+        self.rng = np.random.default_rng(seed)
 
     def __len__(self):
         return len(self.labels)
 
     def __getitem__(self, idx):
-        patch = self.patches[idx].astype(np.float32) / 255.0
+        patch = self.patches[idx]
+        if self.augment:
+            patch = augment_color(patch, self.rng)
+        patch = patch.astype(np.float32) / 255.0
         patch = torch.from_numpy(patch).permute(2, 0, 1)  # HWC -> CHW, what PyTorch conv layers expect
         label = int(self.labels[idx])
         return patch, label
@@ -99,6 +127,8 @@ def main():
     parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--val_frac", type=float, default=0.15)
+    parser.add_argument("--no_color_augment", action="store_true",
+                         help="Disable color augmentation (for A/B comparison against the augmented run)")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -111,9 +141,11 @@ def main():
     print(f"Train: {len(idx_train)} ({labels[idx_train].sum()} positive)  "
           f"Val: {len(idx_val)} ({labels[idx_val].sum()} positive)")
 
-    dataset = PatchDataset(patches, labels)
-    train_loader = DataLoader(Subset(dataset, idx_train), batch_size=args.batch_size, shuffle=True)
-    val_loader = DataLoader(Subset(dataset, idx_val), batch_size=args.batch_size, shuffle=False)
+    dataset_train = PatchDataset(patches, labels, augment=not args.no_color_augment, seed=42)
+    dataset_val = PatchDataset(patches, labels, augment=False)  # never augment validation -- we want to
+                                                                  # measure real performance, not training-time noise
+    train_loader = DataLoader(Subset(dataset_train, idx_train), batch_size=args.batch_size, shuffle=True)
+    val_loader = DataLoader(Subset(dataset_val, idx_val), batch_size=args.batch_size, shuffle=False)
 
     # class weights: inverse frequency, so the rare positive class isn't
     # drowned out by the abundant negatives during training

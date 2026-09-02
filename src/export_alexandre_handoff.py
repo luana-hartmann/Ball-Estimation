@@ -9,7 +9,7 @@ Outputs generated in handoff_alexandre/:
 
 Usage:
     python src/export_alexandre_handoff.py \
-        --trajectories_dir outputs/trajectories \
+        --trajectories_dir handoff_alexandre/trajectories \
         --keypoints_dir outputs/keypoints/json \
         --out_dir handoff_alexandre
 """
@@ -32,17 +32,16 @@ KEYPOINT_ORDER = [
     "center",
     "net_left_edge",
     "net_right_edge",
-    "net_post_far_base",
-    "net_post_near_base",
-    "net_post_far_top",
-    "net_post_near_top",
+    "net_post_left_base",
+    "net_post_right_base",
+    "net_post_left_top",
+    "net_post_right_top",
 ]
 
 
 def load_keypoints(json_path):
     with open(json_path, "r") as f:
         data = json.load(f)
-    # Return as flat (13, 2) array following standard order
     coords = []
     for k in KEYPOINT_ORDER:
         coords.append(data[k])
@@ -53,23 +52,23 @@ def process_dataset(traj_csv, kp_json, out_dir):
     test_id = os.path.splitext(os.path.basename(traj_csv))[0].replace("trajectory_", "")
 
     df_traj = pd.read_csv(traj_csv)
-    kp_array = load_keypoints(kp_json)  # shape: (13, 2)
+    kp_array = load_keypoints(kp_json)  # (13, 2)
 
     n_frames = len(df_traj)
-    ball_xy = df_traj[["x", "y"]].to_numpy(dtype=np.float32)  # shape: (T, 2)
+    ball_xy = df_traj[["x", "y"]].to_numpy(dtype=np.float32)
 
-    # 1. Build Tensor (T, 14, 2): ball is index 0, keypoints are 1..13
+    # Tensor (T, 14, 2): ball at index 0, table keypoints at 1..13
     tensor_14pts = np.zeros((n_frames, 14, 2), dtype=np.float32)
     tensor_14pts[:, 0, :] = ball_xy
     tensor_14pts[:, 1:, :] = np.tile(kp_array, (n_frames, 1, 1))
 
-    # 2. Build full 28-feature flat CSV table
-    flat_cols = {}
-    flat_cols["frame_idx"] = df_traj["frame_idx"]
-    flat_cols["timestamp_s"] = df_traj["timestamp_s"]
-    flat_cols["confidence"] = df_traj["confidence"]
-    flat_cols["ball_x"] = df_traj["x"]
-    flat_cols["ball_y"] = df_traj["y"]
+    flat_cols = {
+        "frame_idx": df_traj["frame_idx"],
+        "timestamp_s": df_traj["timestamp_s"],
+        "confidence": df_traj["confidence"],
+        "ball_x": df_traj["x"],
+        "ball_y": df_traj["y"],
+    }
 
     for idx, name in enumerate(KEYPOINT_ORDER):
         flat_cols[f"{name}_x"] = kp_array[idx, 0]
@@ -77,7 +76,6 @@ def process_dataset(traj_csv, kp_json, out_dir):
 
     df_combined = pd.DataFrame(flat_cols)
 
-    # Save outputs
     combined_csv_dir = os.path.join(out_dir, "combined_csv")
     npz_dir = os.path.join(out_dir, "tensors_npz")
     tables_dir = os.path.join(out_dir, "tables")
@@ -91,8 +89,8 @@ def process_dataset(traj_csv, kp_json, out_dir):
     df_combined.to_csv(csv_out, index=False)
     np.savez_compressed(
         npz_out,
-        inputs=tensor_14pts,                      # (T, 14, 2)
-        inputs_flat=tensor_14pts.reshape(n_frames, 28), # (T, 28)
+        inputs=tensor_14pts,
+        inputs_flat=tensor_14pts.reshape(n_frames, 28),
         frame_idx=df_traj["frame_idx"].to_numpy(),
         timestamp_s=df_traj["timestamp_s"].to_numpy(),
         confidence=df_traj["confidence"].to_numpy(),
@@ -113,7 +111,6 @@ def main():
 
     traj_files = sorted(glob.glob(os.path.join(args.trajectories_dir, "trajectory_*.csv")))
     if not traj_files:
-        # Fallback to local search if paths differ
         traj_files = sorted(glob.glob("trajectory_*.csv"))
 
     if not traj_files:
@@ -126,7 +123,6 @@ def main():
         base = os.path.splitext(os.path.basename(traj_path))[0]
         test_id = base.replace("trajectory_", "")
 
-        # Look for corresponding keypoint json
         kp_json = os.path.join(args.keypoints_dir, f"{test_id}_keypoints.json")
         if not os.path.exists(kp_json):
             kp_json = os.path.join(args.keypoints_dir, f"keypoints_{test_id}.json")

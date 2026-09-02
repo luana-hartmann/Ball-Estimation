@@ -35,19 +35,19 @@
     980.2081909179688,
     630.6416625976562
   ],
-  "net_post_far_base": [
+  "net_post_left_base": [
     952.2817993164062,
     475.0965576171875
   ],
-  "net_post_near_base": [
+  "net_post_right_base": [
     983.6790771484375,
     649.973876953125
   ],
-  "net_post_far_top": [
+  "net_post_left_top": [
     952.2817993164062,
     456.4296875
   ],
-  "net_post_near_top": [
+  "net_post_right_top": [
     983.6790771484375,
     631.3070068359375
   ]

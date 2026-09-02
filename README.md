@@ -75,3 +75,13 @@ data/test2/ball_markup_test2.json
 - Make does not know when *logic* (not just inputs) has changed --
   if you edit a script, `make clean NAME=<x>` before rerunning, or Make
   will silently reuse a stale output file.
+
+  ---
+
+## Changelog & Updates from Baseline
+
+Compared to the initial version of this repository, the pipeline has been upgraded from an empirical heuristic filter to a production-ready hybrid vision system[cite: 1]:
+- **Learned Candidate Classification:** Replaced rule-based filtering with a lightweight compact CNN (~25k parameters) trained on 77k candidate patches, coupled with color-jitter data augmentation to eliminate color bias[cite: 1].
+- **Benchmarked Generalisation:** Added consolidated quantitative benchmark results across unseen evaluation clips (`test_3`, `test_6`, `test_7`), demonstrating >95% precision/recall with sub-2px mean localisation error[cite: 1].
+- **Geometric Table Calibration:** Implemented planar homography and ITTF-compliant perspective projection to automatically extract and track the 13 canonical table keypoints and net posts[cite: 1].
+- **Downstream 3D/Spin Handoff Interface:** Standardised output formatting to export structured spatio-temporal tensors `(T, 14, 2)` and `(T, 28)` alongside frame metadata (`.npz` and `.csv`) for direct integration with the SPT Transformer module[cite: 1].

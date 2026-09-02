@@ -10,7 +10,7 @@ Usage:
     # Batch run all tests automatically:
     python src/table_keypoints.py --batch --data_dir data --out_dir outputs/keypoints
 
-    # Interactive manual adjustment (4 clicks: Top-Left, Top-Right, Bottom-Right, Bottom-Left):
+    # Interactive adjustment (4 clicks: Top-Left, Top-Right, Bottom-Right, Bottom-Left):
     python src/table_keypoints.py --video data/test2/test2.mp4 --frame 50 --interactive --out_dir outputs/keypoints
 """
 
@@ -22,16 +22,13 @@ import cv2
 import numpy as np
 
 # Official ITTF Table Dimensions (in cm)
-TABLE_LENGTH_CM = 274.0   # along X (player to player)
-TABLE_WIDTH_CM = 152.5    # along Y (far to near)
+TABLE_WIDTH_CM = 152.5    # along X (across table, left-to-right from camera view)
+TABLE_LENGTH_CM = 274.0   # along Y (down table length, far-to-near from camera view)
 NET_HEIGHT_CM = 15.25
 NET_OVERHANG_CM = 15.25
 
 
 def find_table_corners_auto(frame, roi_top_frac=0.45):
-    """
-    Automatic corner detector for unobstructed, well-lit frames.
-    """
     h, w = frame.shape[:2]
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
@@ -39,7 +36,6 @@ def find_table_corners_auto(frame, roi_top_frac=0.45):
     upper_blue = np.array([135, 255, 255])
     mask = cv2.inRange(hsv, lower_blue, upper_blue)
 
-    # Exclude upper background and extreme borders
     mask[: int(h * roi_top_frac), :] = 0
     mask[:, : int(w * 0.05)] = 0
     mask[:, int(w * 0.95):] = 0
@@ -87,12 +83,23 @@ def find_table_corners_auto(frame, roi_top_frac=0.45):
 def compute_all_13_keypoints(corners):
     """
     Computes all 13 canonical keypoints via planar homography mapping.
+    Broadcast camera geometry:
+      - X-axis: Table LENGTH (274.0 cm, from Left Player to Right Player)
+      - Y-axis: Table WIDTH (152.5 cm, from Far edge to Near edge)
+      - Net: Runs vertically at X = 137.0 cm (across the width Y)
+      - Net Posts: Physically located at the Far (top) and Near (bottom) ends of the net
     """
+    TABLE_LENGTH_CM = 274.0   # Left to Right
+    TABLE_WIDTH_CM = 152.5    # Far to Near
+    NET_HEIGHT_CM = 15.25
+    NET_OVERHANG_CM = 15.25
+
+    # 1. Canonical 2D coordinates of the 4 table corners
     src_canonical = np.array([
-        [0.0, 0.0],
-        [TABLE_LENGTH_CM, 0.0],
-        [TABLE_LENGTH_CM, TABLE_WIDTH_CM],
-        [0.0, TABLE_WIDTH_CM]
+        [0.0, 0.0],                          # Far Left
+        [TABLE_LENGTH_CM, 0.0],              # Far Right
+        [TABLE_LENGTH_CM, TABLE_WIDTH_CM],   # Near Right
+        [0.0, TABLE_WIDTH_CM]                # Near Left
     ], dtype=np.float32)
 
     dst_image = np.array([
@@ -104,21 +111,21 @@ def compute_all_13_keypoints(corners):
 
     H, _ = cv2.findHomography(src_canonical, dst_image)
 
-    half_l = TABLE_LENGTH_CM / 2.0
-    half_w = TABLE_WIDTH_CM / 2.0
+    half_l = TABLE_LENGTH_CM / 2.0  # 137.0 cm
+    half_w = TABLE_WIDTH_CM / 2.0   # 76.25 cm
 
     planar_points = {
         "corner_far_left": [0.0, 0.0],
         "corner_far_right": [TABLE_LENGTH_CM, 0.0],
         "corner_near_right": [TABLE_LENGTH_CM, TABLE_WIDTH_CM],
         "corner_near_left": [0.0, TABLE_WIDTH_CM],
-        "centerline_far_edge": [0.0, half_w],
-        "centerline_near_edge": [TABLE_LENGTH_CM, half_w],
-        "center": [half_l, half_w],
-        "net_left_edge": [half_l, 0.0],
-        "net_right_edge": [half_l, TABLE_WIDTH_CM],
-        "net_post_far_base": [half_l, -NET_OVERHANG_CM],
-        "net_post_near_base": [half_l, TABLE_WIDTH_CM + NET_OVERHANG_CM],
+        "centerline_far_edge": [0.0, half_w],             # Left edge centerline
+        "centerline_near_edge": [TABLE_LENGTH_CM, half_w], # Right edge centerline
+        "center": [half_l, half_w],                       # Exact table center
+        "net_left_edge": [half_l, 0.0],                   # Net at Far top edge
+        "net_right_edge": [half_l, TABLE_WIDTH_CM],       # Net at Near bottom edge
+        "net_post_left_base": [half_l, -NET_OVERHANG_CM], # Far net post base (extends top)
+        "net_post_right_base": [half_l, TABLE_WIDTH_CM + NET_OVERHANG_CM], # Near net post base (extends bottom)
     }
 
     pts_names = list(planar_points.keys())
@@ -129,16 +136,17 @@ def compute_all_13_keypoints(corners):
     for name, pt in zip(pts_names, projected):
         keypoints[name] = (float(pt[0]), float(pt[1]))
 
+    # Post tops: vertical elevation in image plane
     depth_left = np.linalg.norm(np.array(corners["near_left"]) - np.array(corners["far_left"]))
     depth_right = np.linalg.norm(np.array(corners["near_right"]) - np.array(corners["far_right"]))
     avg_depth = (depth_left + depth_right) / 2.0
     post_h = (NET_HEIGHT_CM / TABLE_WIDTH_CM) * avg_depth
 
-    far_base_x, far_base_y = keypoints["net_post_far_base"]
-    near_base_x, near_base_y = keypoints["net_post_near_base"]
+    far_base_x, far_base_y = keypoints["net_post_left_base"]
+    near_base_x, near_base_y = keypoints["net_post_right_base"]
 
-    keypoints["net_post_far_top"] = (far_base_x, far_base_y - post_h)
-    keypoints["net_post_near_top"] = (near_base_x, near_base_y - post_h)
+    keypoints["net_post_left_top"] = (far_base_x, far_base_y - post_h)
+    keypoints["net_post_right_top"] = (near_base_x, near_base_y - post_h)
 
     return keypoints
 
@@ -203,13 +211,13 @@ def run_interactive(frame, initial_corners=None):
 
         cv2.imshow(window_name, vis)
         key = cv2.waitKey(20) & 0xFF
-        if key in [13, 32]:  # ENTER or SPACE
+        if key in [13, 32]:
             break
         elif key in [ord("r"), ord("R")]:
             manual_clicks = []
             current_corners = None
             print("[*] Reset. Click 4 corners in order: Far-Left, Far-Right, Near-Right, Near-Left")
-        elif key == 27:  # ESC
+        elif key == 27:
             current_corners = None
             break
 
